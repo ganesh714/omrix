@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 
 export function activate(context: vscode.ExtensionContext) {
     const provider = new OmrixChatProvider(context.extensionUri);
@@ -34,6 +35,90 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
         };
 
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+
+        // Listen for messages from the Webview
+        webviewView.webview.onDidReceiveMessage(async (message) => {
+            if (message.type === 'prompt') {
+                await this.handlePrompt(message.text, message.model, webviewView);
+            }
+        });
+    }
+
+    private async handlePrompt(prompt: string, model: string, webviewView: vscode.WebviewView) {
+        const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+        const API_URL = 'http://localhost:8000/chat';
+        const globalFetch = (globalThis as any).fetch;
+
+        try {
+            // Echo back user's prompt immediately
+            webviewView.webview.postMessage({ type: 'addMessage', text: prompt, isUser: true });
+            webviewView.webview.postMessage({ type: 'setLoading', text: 'Thinking...' });
+
+            let response = await globalFetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt, model, workspace: workspacePath })
+            });
+
+            if (!response.ok) {
+                throw new Error('Server responded with an error');
+            }
+
+            let data: any = await response.json();
+
+            // Handle the potential for a 'read_file' tool call
+            if (data.type === 'tool_call' && data.tool_name === 'read_file') {
+                const filePath = data.file_path;
+                let fileContent = '';
+                
+                webviewView.webview.postMessage({ type: 'setLoading', text: `Reading file ${filePath}...` });
+
+                try {
+                    const absolutePath = path.isAbsolute(filePath) 
+                        ? filePath 
+                        : path.join(workspacePath, filePath);
+                        
+                    const fileUri = vscode.Uri.file(absolutePath);
+                    const uint8Array = await vscode.workspace.fs.readFile(fileUri);
+                    fileContent = new TextDecoder().decode(uint8Array);
+                } catch (err: any) {
+                    fileContent = `Error reading file: ${err.message}`;
+                }
+
+                webviewView.webview.postMessage({ type: 'setLoading', text: 'Analyzing file...' });
+
+                // Make a second fetch POST request with the file's contents
+                response = await globalFetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: prompt,
+                        model: model,
+                        workspace: workspacePath,
+                        tool_response: {
+                           tool_name: 'read_file',
+                           content: fileContent
+                        }
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Server error on tool response');
+                }
+                data = await response.json();
+            }
+
+            // Remove loading and post the final response text
+            webviewView.webview.postMessage({ type: 'removeLoading' });
+            
+            const responseText = data.response || "No response field returned.";
+            webviewView.webview.postMessage({ type: 'addMessage', text: responseText, isUser: false });
+
+        } catch (error: any) {
+            console.error('Fetch error:', error);
+            webviewView.webview.postMessage({ type: 'removeLoading' });
+            webviewView.webview.postMessage({ type: 'addMessage', text: `Error: Failed to connect or execute feature.`, isUser: false, isError: true });
+        }
     }
 
     private _getHtmlForWebview(webview: vscode.Webview) {
@@ -42,7 +127,7 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; connect-src http://localhost:8000;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://cdn.jsdelivr.net;">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <title>Omrix Chat</title>
     <style>
@@ -119,14 +204,8 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
         }
 
         /* Markdown Styles */
-        .bot-message p {
-            margin: 0 0 8px 0;
-        }
-        
-        .bot-message p:last-child {
-            margin-bottom: 0;
-        }
-
+        .bot-message p { margin: 0 0 8px 0; }
+        .bot-message p:last-child { margin-bottom: 0; }
         pre {
             background-color: var(--vscode-textCodeBlock-background);
             padding: 10px;
@@ -135,7 +214,6 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
             margin: 8px 0;
             border: 1px solid var(--vscode-widget-border);
         }
-
         code {
             font-family: var(--vscode-editor-font-family);
             background-color: var(--vscode-textCodeBlock-background);
@@ -143,17 +221,9 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
             border-radius: 3px;
             font-size: 0.9em;
         }
+        pre code { padding: 0; background-color: transparent; border: none; }
 
-        pre code {
-            padding: 0;
-            background-color: transparent;
-            border: none;
-        }
-
-        .loading {
-            font-style: italic;
-            opacity: 0.7;
-        }
+        .loading { font-style: italic; opacity: 0.7; }
 
         #input-container {
             display: flex;
@@ -175,9 +245,7 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
             font-size: inherit;
         }
 
-        #prompt-input:focus {
-            border-color: var(--vscode-focusBorder);
-        }
+        #prompt-input:focus { border-color: var(--vscode-focusBorder); }
 
         #send-button {
             background-color: var(--vscode-button-background);
@@ -190,13 +258,7 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
             font-weight: bold;
         }
 
-        #send-button:hover {
-            background-color: var(--vscode-button-hoverBackground);
-        }
-
-        #send-button:active {
-            opacity: 0.8;
-        }
+        #send-button:hover { background-color: var(--vscode-button-hoverBackground); }
     </style>
 </head>
 <body>
@@ -218,16 +280,40 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
 
     <script>
         (function() {
+            const vscode = acquireVsCodeApi();
             const chatHistory = document.getElementById('chat-history');
             const promptInput = document.getElementById('prompt-input');
             const sendButton = document.getElementById('send-button');
             const modelSelector = document.getElementById('model-selector');
 
-            const API_URL = 'http://localhost:8000/chat';
+            // Listen for messages from the extension context
+            window.addEventListener('message', event => {
+                const message = event.data;
+                switch (message.type) {
+                    case 'addMessage':
+                        appendMessage(message.text, message.isUser, false, message.isError);
+                        break;
+                    case 'setLoading':
+                        const existingLoading = document.getElementById('loading-indicator');
+                        if (existingLoading) {
+                            existingLoading.textContent = message.text;
+                        } else {
+                            appendMessage(message.text, false, true);
+                        }
+                        break;
+                    case 'removeLoading':
+                        const loader = document.getElementById('loading-indicator');
+                        if (loader) loader.remove();
+                        break;
+                }
+            });
 
-            function appendMessage(text, isUser = false, isLoading = false) {
+            function appendMessage(text, isUser = false, isLoading = false, isError = false) {
                 const msgDiv = document.createElement('div');
                 msgDiv.className = 'message ' + (isUser ? 'user-message' : 'bot-message');
+                if (isError) {
+                    msgDiv.style.color = 'var(--vscode-errorForeground)';
+                }
                 
                 if (isLoading) {
                     msgDiv.classList.add('loading');
@@ -243,35 +329,19 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                 chatHistory.scrollTop = chatHistory.scrollHeight;
             }
 
-            async function sendPrompt() {
+            function sendPrompt() {
                 const text = promptInput.value.trim();
                 const model = modelSelector.value;
                 if (!text) return;
 
                 promptInput.value = '';
-                appendMessage(text, true);
-                appendMessage('Thinking...', false, true);
-
-                try {
-                    const response = await fetch(API_URL, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ prompt: text, model: model })
-                    });
-
-                    if (!response.ok) throw new Error('Server error');
-
-                    const data = await response.json();
-                    document.getElementById('loading-indicator')?.remove();
-                    appendMessage(data.response || "No response.", false);
-
-                } catch (error) {
-                    console.error('Fetch error:', error);
-                    document.getElementById('loading-indicator')?.remove();
-                    appendMessage('Error: Failed to connect.', false);
-                }
+                
+                // Send the message to the extension
+                vscode.postMessage({
+                    type: 'prompt',
+                    text: text,
+                    model: model
+                });
             }
 
             sendButton.addEventListener('click', sendPrompt);
@@ -286,6 +356,6 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
         })();
     </script>
 </body>
-</html>`;
+</html>\`;
     }
 }
