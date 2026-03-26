@@ -66,28 +66,40 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
 
             let data: any = await response.json();
 
-            // Handle the potential for a 'read_file' tool call
-            if (data.type === 'tool_call' && data.tool_name === 'read_file') {
-                const filePath = data.file_path;
-                let fileContent = '';
+            // Handle ANY tool call from the backend
+            if (data.type === 'tool_call') {
+                const toolName = data.tool_name;
+                const toolArgs = data.arguments;
+                const targetPath = toolArgs.relative_path || '';
+                let toolResultContent = '';
                 
-                webviewView.webview.postMessage({ type: 'setLoading', text: `Reading file ${filePath}...` });
+                webviewView.webview.postMessage({ type: 'setLoading', text: `Executing ${toolName}...` });
 
                 try {
-                    const absolutePath = path.isAbsolute(filePath) 
-                        ? filePath 
-                        : path.join(workspacePath, filePath);
-                        
-                    const fileUri = vscode.Uri.file(absolutePath);
-                    const uint8Array = await vscode.workspace.fs.readFile(fileUri);
-                    fileContent = new TextDecoder().decode(uint8Array);
+                    const absolutePath = path.isAbsolute(targetPath) 
+                        ? targetPath 
+                        : path.join(workspacePath, targetPath);
+                    const targetUri = vscode.Uri.file(absolutePath);
+
+                    if (toolName === 'read_file') {
+                        // Read file contents
+                        const uint8Array = await vscode.workspace.fs.readFile(targetUri);
+                        toolResultContent = new TextDecoder().decode(uint8Array);
+                    } else if (toolName === 'list_directory') {
+                        // List directory contents
+                        const entries = await vscode.workspace.fs.readDirectory(targetUri);
+                        // Format the output so Gemini knows what is a file vs a folder
+                        toolResultContent = entries.map(([name, type]) => {
+                            return type === vscode.FileType.Directory ? `[Folder] ${name}` : `[File] ${name}`;
+                        }).join('\n');
+                    }
                 } catch (err: any) {
-                    fileContent = `Error reading file: ${err.message}`;
+                    toolResultContent = `Error executing tool: ${err.message}`;
                 }
 
-                webviewView.webview.postMessage({ type: 'setLoading', text: 'Analyzing file...' });
+                webviewView.webview.postMessage({ type: 'setLoading', text: 'Analyzing results...' });
 
-                // Make a second fetch POST request with the file's contents
+                // Make the second fetch POST request with the tool's output
                 response = await globalFetch(API_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -96,8 +108,9 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                         model: model,
                         workspace: workspacePath,
                         tool_response: {
-                           tool_name: 'read_file',
-                           content: fileContent
+                           tool_name: toolName,
+                           content: toolResultContent,
+                           arguments: toolArgs
                         }
                     })
                 });
@@ -111,7 +124,8 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
             // Remove loading and post the final response text
             webviewView.webview.postMessage({ type: 'removeLoading' });
             
-            const responseText = data.response || "No response field returned.";
+            // THIS IS THE CRITICAL FIX: data.content instead of data.response
+            const responseText = data.content || "No response field returned.";
             webviewView.webview.postMessage({ type: 'addMessage', text: responseText, isUser: false });
 
         } catch (error: any) {
