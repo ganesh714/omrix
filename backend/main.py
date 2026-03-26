@@ -6,7 +6,7 @@ To run the server:
 uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 """
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -77,17 +77,19 @@ agent_tools = [
     )
 ]
 
-
 # =====================================================================
 # Request Schema
 # =====================================================================
+class ToolResponseModel(BaseModel):
+    tool_name: str
+    content: str
+    arguments: dict = {} # Added to accept args from VS Code
 
 class ChatRequest(BaseModel):
-    # Expect a complete conversation history from the client
-    # Expected format: [{"role": "user", "parts": [{"text": "Hello"}]}, ...]
-    messages: List[Dict[str, Any]]
-    model: str = "gemini-2.5-flash"
+    prompt: str  
+    model: str
     workspace: str
+    tool_response: Optional[ToolResponseModel] = None
 
 
 # =====================================================================
@@ -97,46 +99,69 @@ class ChatRequest(BaseModel):
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     try:
-        # Configure the generation settings with our explicit tool schemas
         config = types.GenerateContentConfig(
             tools=agent_tools,
-            temperature=0.0
+            temperature=0.0,
+            system_instruction=(
+                "You are Omrix, an expert AI coding assistant integrated into VS Code. "
+                f"The user's current workspace directory is: {request.workspace}. "
+                "If the user asks about their project, folders (like 'frontend', 'backend'), or files, "
+                "you MUST use your `list_directory` and `read_file` tools to investigate the filesystem "
+                "BEFORE answering. Never guess or give generic advice if you can read their actual code."
+            )
         )
         
-        # Send the full message history to Gemini.
+        contents = [
+            types.Content(role="user", parts=[types.Part.from_text(text=request.prompt)])
+        ]
+
+        if request.tool_response:
+            # Tell Gemini exactly what arguments it used last time
+            contents.append(
+                types.Content(role="model", parts=[
+                    types.Part.from_function_call(
+                        name=request.tool_response.tool_name, 
+                        args=request.tool_response.arguments 
+                    )
+                ])
+            )
+            contents.append(
+                types.Content(role="user", parts=[
+                    types.Part.from_function_response(
+                        name=request.tool_response.tool_name,
+                        response={"content": request.tool_response.content}
+                    )
+                ])
+            )
+        
+        # Safest fallback model
+        actual_model = "gemini-2.5-flash" if request.model == "omrix" else request.model
+
         response = client.models.generate_content(
-            model=request.model,
-            contents=request.messages,
+            model=actual_model,
+            contents=contents,
             config=config
         )
         
-        # Scenario 1: Gemini decides it needs to execute a tool
         if response.function_calls:
-            # For simplicity, extract the first requested function call
             tool_call = response.function_calls[0]
-            
-            # Delegate execution to the VS Code Client
             return {
                 "type": "tool_call",
                 "tool_name": tool_call.name,
-                "arguments": tool_call.args
+                # Safely convert to a native dictionary so FastAPI doesn't crash
+                "arguments": dict(tool_call.args) if tool_call.args else {}
             }
             
-        # Scenario 2: Gemini returns a standard text response
         elif response.text:
             return {
                 "type": "message",
                 "content": response.text
             }
         
-        # Fallback scenario
         else:
-            return {
-                "type": "message",
-                "content": "Received an empty or unsupported response from Gemini."
-            }
+            return {"type": "message", "content": "Received an empty response."}
             
     except Exception as e:
-        # Return a 500 error if the Gemini API fails
+        # This will print the exact Gemini error to your terminal!
+        print(f"ERROR: {str(e)}") 
         raise HTTPException(status_code=500, detail=f"Gemini API Error: {str(e)}")
-
