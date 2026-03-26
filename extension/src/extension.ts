@@ -356,6 +356,6 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
         })();
     </script>
 </body>
-</html>\`;
+</html>`;
     }
 }
