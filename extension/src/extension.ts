@@ -50,60 +50,54 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
         const globalFetch = (globalThis as any).fetch;
 
         try {
-            // Echo back user's prompt immediately
+            // 1. Setup the UI
             webviewView.webview.postMessage({ type: 'addMessage', text: prompt, isUser: true });
             webviewView.webview.postMessage({ type: 'setLoading', text: 'Thinking...' });
 
-            let response = await globalFetch(API_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt, model, workspace: workspacePath })
-            });
+            // 2. The initial payload
+            let currentPayload: any = { prompt, model, workspace: workspacePath };
+            let isDone = false;
+            let finalResponseText = "No response field returned.";
 
-            if (!response.ok) {
-                throw new Error('Server responded with an error');
-            }
-
-            let data: any = await response.json();
-
-            // Handle ANY tool call from the backend
-            if (data.type === 'tool_call') {
-                const toolName = data.tool_name;
-                const toolArgs = data.arguments;
-                const targetPath = toolArgs.relative_path || '';
-                let toolResultContent = '';
-                
-                webviewView.webview.postMessage({ type: 'setLoading', text: `Executing ${toolName}...` });
-
-                try {
-                    const absolutePath = path.isAbsolute(targetPath) 
-                        ? targetPath 
-                        : path.join(workspacePath, targetPath);
-                    const targetUri = vscode.Uri.file(absolutePath);
-
-                    if (toolName === 'read_file') {
-                        // Read file contents
-                        const uint8Array = await vscode.workspace.fs.readFile(targetUri);
-                        toolResultContent = new TextDecoder().decode(uint8Array);
-                    } else if (toolName === 'list_directory') {
-                        // List directory contents
-                        const entries = await vscode.workspace.fs.readDirectory(targetUri);
-                        // Format the output so Gemini knows what is a file vs a folder
-                        toolResultContent = entries.map(([name, type]) => {
-                            return type === vscode.FileType.Directory ? `[Folder] ${name}` : `[File] ${name}`;
-                        }).join('\n');
-                    }
-                } catch (err: any) {
-                    toolResultContent = `Error executing tool: ${err.message}`;
-                }
-
-                webviewView.webview.postMessage({ type: 'setLoading', text: 'Analyzing results...' });
-
-                // Make the second fetch POST request with the tool's output
-                response = await globalFetch(API_URL, {
+            // 3. THE AGENTIC LOOP
+            while (!isDone) {
+                let response = await globalFetch(API_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
+                    body: JSON.stringify(currentPayload)
+                });
+
+                if (!response.ok) throw new Error('Server responded with an error');
+                let data: any = await response.json();
+
+                // Scenario A: Gemini wants to use a tool (could happen multiple times)
+                if (data.type === 'tool_call') {
+                    const toolName = data.tool_name;
+                    const toolArgs = data.arguments;
+                    const targetPath = toolArgs.relative_path || '';
+                    let toolResultContent = '';
+                    
+                    webviewView.webview.postMessage({ type: 'setLoading', text: `Executing ${toolName} on ${targetPath}...` });
+
+                    try {
+                        const absolutePath = path.isAbsolute(targetPath) ? targetPath : path.join(workspacePath, targetPath);
+                        const targetUri = vscode.Uri.file(absolutePath);
+
+                        if (toolName === 'read_file') {
+                            const uint8Array = await vscode.workspace.fs.readFile(targetUri);
+                            toolResultContent = new TextDecoder().decode(uint8Array);
+                        } else if (toolName === 'list_directory') {
+                            const entries = await vscode.workspace.fs.readDirectory(targetUri);
+                            toolResultContent = entries.map(([name, type]) => type === vscode.FileType.Directory ? `[Folder] ${name}` : `[File] ${name}`).join('\n');
+                        }
+                    } catch (err: any) {
+                        toolResultContent = `Error executing tool: ${err.message}`;
+                    }
+
+                    webviewView.webview.postMessage({ type: 'setLoading', text: 'Analyzing results...' });
+
+                    // Update the payload for the NEXT iteration of the loop
+                    currentPayload = {
                         prompt: prompt,
                         model: model,
                         workspace: workspacePath,
@@ -112,21 +106,23 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                            content: toolResultContent,
                            arguments: toolArgs
                         }
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error('Server error on tool response');
+                    };
+                    // The loop continues automatically!
+                } 
+                // Scenario B: Gemini is finished and gives us the final text
+                else if (data.type === 'message') {
+                    finalResponseText = data.content || "Empty response from Gemini.";
+                    isDone = true; // Break the loop!
+                } 
+                else {
+                    finalResponseText = "Unknown response type from server.";
+                    isDone = true;
                 }
-                data = await response.json();
             }
 
-            // Remove loading and post the final response text
+            // 4. Print the final answer to the screen
             webviewView.webview.postMessage({ type: 'removeLoading' });
-            
-            // THIS IS THE CRITICAL FIX: data.content instead of data.response
-            const responseText = data.content || "No response field returned.";
-            webviewView.webview.postMessage({ type: 'addMessage', text: responseText, isUser: false });
+            webviewView.webview.postMessage({ type: 'addMessage', text: finalResponseText, isUser: false });
 
         } catch (error: any) {
             console.error('Fetch error:', error);
