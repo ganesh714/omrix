@@ -1,0 +1,14 @@
+# VS Code extension
+extension/node_modules/
+extension/out/
+extension/*.vsix
+
+# Python backend
+backend/__pycache__/
+backend/.env
+backend/venv/
+backend/.venv/
+
+# General
+.DS_Store
+.vscode/
