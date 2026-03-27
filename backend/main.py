@@ -62,7 +62,9 @@ async def chat_endpoint(request: ChatRequest):
             f"The user's current workspace directory is: {request.workspace}. "
             "If the user asks about their project, folders (like 'frontend', 'backend'), or files, "
             "you MUST use your `list_directory` and `read_file` tools to investigate the filesystem "
-            "BEFORE answering. Never guess or give generic advice if you can read their actual code."
+            "BEFORE answering. Never guess or give generic advice if you can read their actual code. "
+            "IMPORTANT: After using a tool, you should immediately use other tools (like 'modify_file') to finish the request if enough information or context has been gathered. "
+            "Do NOT wait for the user to confirm after reading a file if you already know what needs to be changed. Be proactive and finish the entire objective autonomously."
         )
 
         # Route to Groq Client
@@ -219,7 +221,7 @@ async def chat_endpoint(request: ChatRequest):
                 }
             else:
                 # Force a response if Gemini is silent but doesn't call functions (happens with Flash Lite)
-                return {"type": "message", "content": "I have processed the request. How would you like me to proceed?"}
+                return {"type": "message", "content": "I have processed the data. Based on what I see, let me know if you would like me to continue with a file modification or if there's anything else I can do!"}
             
     except Exception as e:
         print(f"ERROR: {str(e)}") 
