@@ -52,6 +52,7 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
         try {
             // 1. Setup the UI
             webviewView.webview.postMessage({ type: 'addMessage', text: prompt, isUser: true });
+            webviewView.webview.postMessage({ type: 'startBotMessage' });
             webviewView.webview.postMessage({ type: 'setLoading', text: 'Thinking...' });
 
             // 2. The initial payload
@@ -70,14 +71,27 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                 if (!response.ok) throw new Error('Server responded with an error');
                 let data: any = await response.json();
 
-                // Scenario A: Gemini wants to use a tool (could happen multiple times)
+                // Scenario A: Gemini wants to use a tool
                 if (data.type === 'tool_call') {
                     const toolName = data.tool_name;
                     const toolArgs = data.arguments;
                     const targetPath = toolArgs.relative_path || '';
                     let toolResultContent = '';
-                    
-                    webviewView.webview.postMessage({ type: 'setLoading', text: `Executing ${toolName} on ${targetPath}...` });
+
+                    // --- UI UPDATE: Log the step permanently ---
+                    // Temporarily remove the loading spinner
+                    webviewView.webview.postMessage({ type: 'removeLoading' });
+
+                    // Log the step using the new collapsible UI
+                    if (toolName === 'read_file') {
+                        webviewView.webview.postMessage({ type: 'addStep', icon: '📄', action: 'Reading file', target: targetPath });
+                    } else {
+                        webviewView.webview.postMessage({ type: 'addStep', icon: '📂', action: 'Scanning directory', target: targetPath });
+                    }
+
+                    // Put the loading spinner back at the bottom
+                    webviewView.webview.postMessage({ type: 'setLoading', text: `Executing ${toolName}...` });
+                    // -------------------------------------------
 
                     try {
                         const absolutePath = path.isAbsolute(targetPath) ? targetPath : path.join(workspacePath, targetPath);
@@ -94,6 +108,7 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                         toolResultContent = `Error executing tool: ${err.message}`;
                     }
 
+                    // Update spinner text
                     webviewView.webview.postMessage({ type: 'setLoading', text: 'Analyzing results...' });
 
                     // Update the payload for the NEXT iteration of the loop
@@ -102,18 +117,17 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                         model: model,
                         workspace: workspacePath,
                         tool_response: {
-                           tool_name: toolName,
-                           content: toolResultContent,
-                           arguments: toolArgs
+                            tool_name: toolName,
+                            content: toolResultContent,
+                            arguments: toolArgs
                         }
                     };
-                    // The loop continues automatically!
-                } 
+                }
                 // Scenario B: Gemini is finished and gives us the final text
                 else if (data.type === 'message') {
                     finalResponseText = data.content || "Empty response from Gemini.";
-                    isDone = true; // Break the loop!
-                } 
+                    isDone = true;
+                }
                 else {
                     finalResponseText = "Unknown response type from server.";
                     isDone = true;
@@ -215,6 +229,53 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
 
         /* Markdown Styles */
         .bot-message p { margin: 0 0 8px 0; }
+        
+        /* Agent Steps UI */
+        .agent-steps-container {
+            margin-bottom: 8px;
+            color: var(--vscode-descriptionForeground);
+        }
+        
+        .agent-steps-container summary {
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: bold;
+            user-select: none;
+            outline: none;
+            margin-bottom: 4px;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+
+        .agent-steps-container summary:hover {
+            opacity: 1;
+        }
+        
+        .steps-content {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding-left: 12px;
+            margin-top: 6px;
+            margin-bottom: 8px;
+            border-left: 2px solid var(--vscode-widget-border);
+        }
+        
+        .agent-step {
+            font-family: var(--vscode-editor-font-family);
+            font-size: 0.9em;
+            color: var(--vscode-descriptionForeground);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .agent-step code {
+            font-size: 1em;
+            background: transparent;
+            border: 1px solid var(--vscode-widget-border);
+            padding: 1px 4px;
+        }
         .bot-message p:last-child { margin-bottom: 0; }
         pre {
             background-color: var(--vscode-textCodeBlock-background);
@@ -296,20 +357,72 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
             const sendButton = document.getElementById('send-button');
             const modelSelector = document.getElementById('model-selector');
 
+            let currentBotContainer = null;
+            let currentStepsDetails = null;
+
             // Listen for messages from the extension context
             window.addEventListener('message', event => {
                 const message = event.data;
                 switch (message.type) {
+                    case 'startBotMessage':
+                        currentBotContainer = document.createElement('div');
+                        currentBotContainer.className = 'message bot-message';
+                        
+                        currentStepsDetails = document.createElement('details');
+                        currentStepsDetails.className = 'agent-steps-container';
+                        currentStepsDetails.style.display = 'none';
+                        currentStepsDetails.innerHTML = '<summary>View Agent Steps</summary><div class="steps-content"></div>';
+                        
+                        const finalContent = document.createElement('div');
+                        finalContent.className = 'final-content';
+                        
+                        currentBotContainer.appendChild(currentStepsDetails);
+                        currentBotContainer.appendChild(finalContent);
+                        
+                        chatHistory.appendChild(currentBotContainer);
+                        chatHistory.scrollTop = chatHistory.scrollHeight;
+                        break;
+                    case 'addStep':
+                        if (!currentStepsDetails) return;
+                        currentStepsDetails.style.display = 'block';
+                        const stepDiv = document.createElement('div');
+                        stepDiv.className = 'agent-step';
+                        stepDiv.innerHTML = \`<span>\${message.icon}</span> <span>\${message.action}:</span> <code>\${message.target}</code>\`;
+                        currentStepsDetails.querySelector('.steps-content').appendChild(stepDiv);
+                        chatHistory.scrollTop = chatHistory.scrollHeight;
+                        break;
                     case 'addMessage':
-                        appendMessage(message.text, message.isUser, false, message.isError);
+                        if (message.isUser) {
+                            appendMessage(message.text, true, false, message.isError);
+                        } else {
+                            if (currentBotContainer) {
+                                const content = currentBotContainer.querySelector('.final-content');
+                                if (message.isError) {
+                                    content.style.color = 'var(--vscode-errorForeground)';
+                                    content.textContent = message.text;
+                                } else {
+                                    content.innerHTML = marked.parse(message.text);
+                                }
+                                currentBotContainer = null;
+                                currentStepsDetails = null;
+                                chatHistory.scrollTop = chatHistory.scrollHeight;
+                            } else {
+                                appendMessage(message.text, false, false, message.isError);
+                            }
+                        }
                         break;
                     case 'setLoading':
-                        const existingLoading = document.getElementById('loading-indicator');
+                        let existingLoading = document.getElementById('loading-indicator');
                         if (existingLoading) {
                             existingLoading.textContent = message.text;
                         } else {
-                            appendMessage(message.text, false, true);
+                            existingLoading = document.createElement('div');
+                            existingLoading.id = 'loading-indicator';
+                            existingLoading.className = 'message loading bot-message'; // Match styling but italicized
+                            existingLoading.textContent = message.text;
+                            chatHistory.appendChild(existingLoading);
                         }
+                        chatHistory.scrollTop = chatHistory.scrollHeight;
                         break;
                     case 'removeLoading':
                         const loader = document.getElementById('loading-indicator');
