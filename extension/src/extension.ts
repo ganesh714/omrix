@@ -15,6 +15,7 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'omrix.chatView';
 
     private _view?: vscode.WebviewView;
+    private _chatHistory: { role: 'user' | 'bot', text: string }[] = [];
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -57,7 +58,13 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
 
             // 2. The initial payload
             let toolHistory: any[] = [];
-            let currentPayload: any = { prompt, model, workspace: workspacePath, tool_history: toolHistory };
+            let currentPayload: any = { 
+                prompt, 
+                model, 
+                workspace: workspacePath, 
+                tool_history: toolHistory,
+                chat_history: this._chatHistory 
+            };
             let isDone = false;
             let finalResponseText = "No response field returned.";
 
@@ -153,6 +160,10 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
             // 4. Print the final answer to the screen
             webviewView.webview.postMessage({ type: 'removeLoading' });
             webviewView.webview.postMessage({ type: 'addMessage', text: finalResponseText, isUser: false });
+
+            // 5. Update persistent history for subsequent turns
+            this._chatHistory.push({ role: 'user', text: prompt });
+            this._chatHistory.push({ role: 'bot', text: finalResponseText });
 
         } catch (error: any) {
             console.error('Fetch error:', error);

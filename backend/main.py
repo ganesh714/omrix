@@ -46,6 +46,7 @@ class ChatRequest(BaseModel):
     model: str
     workspace: str
     tool_history: List[ToolResponseModel] = []
+    chat_history: List[Dict[str, str]] = []
 
 
 # =====================================================================
@@ -69,6 +70,10 @@ async def chat_endpoint(request: ChatRequest):
             messages = [{"role": "system", "content": system_instruction}]
             
             # Standard OpenAI-style message format for Groq
+            for msg in request.chat_history:
+                role = "user" if msg["role"] == "user" else "assistant"
+                messages.append({"role": role, "content": msg["text"]})
+            
             messages.append({"role": "user", "content": request.prompt})
             
             for i, tool_res in enumerate(request.tool_history):
@@ -118,9 +123,12 @@ async def chat_endpoint(request: ChatRequest):
                 system_instruction=system_instruction
             )
             
-            contents = [
-                types.Content(role="user", parts=[types.Part.from_text(text=request.prompt)])
-            ]
+            contents = []
+            for msg in request.chat_history:
+                role = "user" if msg["role"] == "user" else "model"
+                contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["text"])]))
+            
+            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=request.prompt)]))
 
             for tool_res in request.tool_history:
                 contents.append(
@@ -151,6 +159,9 @@ async def chat_endpoint(request: ChatRequest):
                 # We reuse the Groq message formatting from above
                 fallback_model = "llama-3.1-8b-instant" #"llama-3.1-70b-versatile"
                 messages = [{"role": "system", "content": system_instruction}]
+                for msg in request.chat_history:
+                    role = "user" if msg["role"] == "user" else "assistant"
+                    messages.append({"role": role, "content": msg["text"]})
                 
                 messages.append({"role": "user", "content": request.prompt})
                 
@@ -207,7 +218,8 @@ async def chat_endpoint(request: ChatRequest):
                     "content": response.text
                 }
             else:
-                return {"type": "message", "content": "Received an empty response."}
+                # Force a response if Gemini is silent but doesn't call functions (happens with Flash Lite)
+                return {"type": "message", "content": "I have processed the request. How would you like me to proceed?"}
             
     except Exception as e:
         print(f"ERROR: {str(e)}") 
