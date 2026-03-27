@@ -41,6 +41,31 @@ groq_tools = [
                 "required": ["relative_path"],
             },
         },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "modify_file",
+            "description": "Modifies an existing file by replacing a block of text. Use this to edit or update code/content inside a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "relative_path": {
+                        "type": "string",
+                        "description": "The path to the file to modify.",
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "description": "The exact text to be replaced. Must match exactly what is in the file.",
+                    },
+                    "new_text": {
+                        "type": "string",
+                        "description": "The new text to insert in place of the old_text.",
+                    }
+                },
+                "required": ["relative_path", "old_text", "new_text"],
+            },
+        },
     }
 ]
 

@@ -86,6 +86,8 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                     // Log the step using the new collapsible UI
                     if (toolName === 'read_file') {
                         webviewView.webview.postMessage({ type: 'addStep', icon: '📄', action: 'Reading file', target: targetPath });
+                    } else if (toolName === 'modify_file') {
+                        webviewView.webview.postMessage({ type: 'addStep', icon: '✏️', action: 'Editing file', target: targetPath });
                     } else {
                         webviewView.webview.postMessage({ type: 'addStep', icon: '📂', action: 'Scanning directory', target: targetPath });
                     }
@@ -101,6 +103,18 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                         if (toolName === 'read_file') {
                             const uint8Array = await vscode.workspace.fs.readFile(targetUri);
                             toolResultContent = new TextDecoder().decode(uint8Array);
+                        } else if (toolName === 'modify_file') {
+                            const uint8Array = await vscode.workspace.fs.readFile(targetUri);
+                            let fileContent = new TextDecoder().decode(uint8Array);
+                            const oldText = toolArgs.old_text;
+                            const newText = toolArgs.new_text;
+                            if (fileContent.includes(oldText)) {
+                                fileContent = fileContent.replace(oldText, newText);
+                                await vscode.workspace.fs.writeFile(targetUri, new TextEncoder().encode(fileContent));
+                                toolResultContent = `Successfully replaced exact text string in ${targetPath}`;
+                            } else {
+                                toolResultContent = `Error: Exact old_text string not found in ${targetPath}. Consider reading the file again to check whitespace/formatting.`;
+                            }
                         } else if (toolName === 'list_directory') {
                             const entries = await vscode.workspace.fs.readDirectory(targetUri);
                             toolResultContent = entries.map(([name, type]) => type === vscode.FileType.Directory ? `[Folder] ${name}` : `[File] ${name}`).join('\n');

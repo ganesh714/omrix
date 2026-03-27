@@ -39,6 +39,28 @@ agent_tools = [
                     },
                     required=["relative_path"]
                 )
+            ),
+            types.FunctionDeclaration(
+                name="modify_file",
+                description="Modifies an existing file by replacing a block of text. Use this to edit or update code/content inside a file.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "relative_path": types.Schema(
+                            type=types.Type.STRING,
+                            description="The path to the file to modify."
+                        ),
+                        "old_text": types.Schema(
+                            type=types.Type.STRING,
+                            description="The exact text to be replaced. Must match exactly what is in the file."
+                        ),
+                        "new_text": types.Schema(
+                            type=types.Type.STRING,
+                            description="The new text to insert in place of the old_text."
+                        )
+                    },
+                    required=["relative_path", "old_text", "new_text"]
+                )
             )
         ]
     )
