@@ -45,34 +45,79 @@ groq_tools = [
 ]
 
 
-class GroqClient:
+class GroqRotatorClient:
+    """
+    Client for Groq API that rotates through a list of API keys.
+    When a '429 Rate Limit' error is hit, it switches to the next available key.
+    """
     def __init__(self):
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key or api_key == "your_groq_api_key_here":
-            logger.warning("GROQ_API_KEY is not set or is a placeholder. Groq requests will fail.")
-            self.client = None
-        else:
-            self.client = Groq(api_key=api_key)
+        self.clients = []
+        self.current_index = 0
+        
+        # Load all environment variables starting with GROQ_API_KEY
+        keys = sorted([k for k in os.environ.keys() if k.startswith("GROQ_API_KEY")])
+        for key in keys:
+            api_key = os.environ.get(key)
+            if api_key and api_key != "your_groq_api_key_here" and not api_key.startswith("your_groq_api_key"):
+                try:
+                    self.clients.append(Groq(api_key=api_key))
+                    logger.info(f"Loaded Groq key from {key}")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize Groq client with {key}: {e}")
+
+        # Fallback to standard check if no specific keys found (could pick up standard GROQ_API_KEY from environment)
+        if not self.clients:
+            api_key = os.environ.get("GROQ_API_KEY")
+            if api_key and not api_key.startswith("your_groq"):
+                self.clients.append(Groq(api_key=api_key))
+                logger.info("Loaded standard Groq key")
+            else:
+                logger.warning("No valid GROQ_API_KEY_* found in .env. Groq fallback will fail.")
+
+    def get_current_client(self):
+        if not self.clients:
+             raise Exception("Groq API client is not initialized. Ensure valid GROQ_API_KEY_* are set.")
+        return self.clients[self.current_index]
+
+    def rotate_client(self):
+        if self.clients:
+            self.current_index = (self.current_index + 1) % len(self.clients)
+            logger.warning(f"Rotated to Groq API key index {self.current_index}")
 
     def generate_content(self, model: str, messages: list):
-        if not self.client:
-            raise Exception("Groq API client is not initialized. Ensure GROQ_API_KEY is set in .env.")
+        if not self.clients:
+            raise Exception("Groq API client is not initialized. Ensure valid GROQ_API_KEY_* are set.")
+            
+        max_retries = len(self.clients)
+        attempts = 0
+        last_exception = None
+
+        active_model = model if model.startswith("llama") or model.startswith("mixtral") or model.startswith("gemma") else "llama-3.1-70b-versatile"
+            
+        while attempts < max_retries:
+            client = self.get_current_client()
+            try:
+                chat_completion = client.chat.completions.create(
+                    messages=messages,
+                    model=active_model,
+                    tools=groq_tools,
+                    tool_choice="auto"
+                )
+                return chat_completion.choices[0].message
+            except Exception as e:
+                error_msg = str(e).lower()
+                # Check for rate limit / 429 errors from Groq
+                if "429" in error_msg or "rate limit" in error_msg:
+                    logger.error(f"Groq API key index {self.current_index} rate-limited (429). Generating content failed.")
+                    self.rotate_client()
+                    attempts += 1
+                    last_exception = e
+                else:
+                    # Reraise immediately if it's not a rate limit
+                    raise e
         
-        try:
-            # Fallback to a default text model if not specified
-            active_model = model if model.startswith("llama") or model.startswith("mixtral") else "llama-3.1-70b-versatile"
-            
-            chat_completion = self.client.chat.completions.create(
-                messages=messages,
-                model=active_model,
-                tools=groq_tools,
-                tool_choice="auto"
-            )
-            
-            return chat_completion.choices[0].message
-        except Exception as e:
-            logger.error(f"Groq API Error: {str(e)}")
-            raise e
+        logger.critical(f"All {max_retries} Groq API keys have exhausted limits.")
+        raise last_exception if last_exception else Exception("All Groq API keys have exhausted their limits.")
 
 # Instantiate global Groq client
-groq_service = GroqClient()
+groq_service = GroqRotatorClient()
