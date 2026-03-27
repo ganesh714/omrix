@@ -56,7 +56,8 @@ class ChatRequest(BaseModel):
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     try:
-        actual_model = "gemini-2.5-flash-lite" if request.model == "omrix" else request.model
+        actual_model = "gemini-2.5-pro" if request.model == "omrix" else request.model
+        print(f"DEBUG: Active Model: {actual_model}")
         system_instruction = (
             "You are Omrix, an expert AI coding assistant integrated into VS Code. "
             f"The user's current workspace directory is: {request.workspace}. "
@@ -109,6 +110,7 @@ async def chat_endpoint(request: ChatRequest):
                     "arguments": json.loads(tool_call.arguments)
                 }
             elif response.content:
+                print(f"DEBUG: Groq Response: {response.content[:100]}...")
                 return {
                     "type": "message",
                     "content": response.content
@@ -215,12 +217,14 @@ async def chat_endpoint(request: ChatRequest):
                     "arguments": dict(tool_call.args) if tool_call.args else {}
                 }
             elif response.text:
+                print(f"DEBUG: Gemini Response: {response.text[:100]}...")
                 return {
                     "type": "message",
                     "content": response.text
                 }
             else:
-                # Force a response if Gemini is silent but doesn't call functions (happens with Flash Lite)
+                # Force a response if Gemini is silent but doesn't call functions (happens with Flash models)
+                print("DEBUG: Gemini returned empty text and no function calls.")
                 return {"type": "message", "content": "I have processed the data. Based on what I see, let me know if you would like me to continue with a file modification or if there's anything else I can do!"}
             
     except Exception as e:
