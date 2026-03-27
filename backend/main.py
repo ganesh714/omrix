@@ -45,7 +45,7 @@ class ChatRequest(BaseModel):
     prompt: str  
     model: str
     workspace: str
-    tool_response: Optional[ToolResponseModel] = None
+    tool_history: List[ToolResponseModel] = []
 
 
 # =====================================================================
@@ -55,7 +55,7 @@ class ChatRequest(BaseModel):
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     try:
-        actual_model = "gemini-2.5-flash" if request.model == "omrix" else request.model
+        actual_model = "gemini-2.5-flash-lite" if request.model == "omrix" else request.model
         system_instruction = (
             "You are Omrix, an expert AI coding assistant integrated into VS Code. "
             f"The user's current workspace directory is: {request.workspace}. "
@@ -69,33 +69,27 @@ async def chat_endpoint(request: ChatRequest):
             messages = [{"role": "system", "content": system_instruction}]
             
             # Standard OpenAI-style message format for Groq
-            if request.tool_response:
-                messages.append({
-                    "role": "user",
-                    "content": request.prompt
-                })
+            messages.append({"role": "user", "content": request.prompt})
+            
+            for i, tool_res in enumerate(request.tool_history):
+                call_id = f"call_{i}"
                 messages.append({
                     "role": "assistant",
                     "content": None,
                     "tool_calls": [{
-                        "id": "call_123", # Dummy ID since we don't cache
+                        "id": call_id,
                         "type": "function",
                         "function": {
-                            "name": request.tool_response.tool_name,
-                            "arguments": json.dumps(request.tool_response.arguments)
+                            "name": tool_res.tool_name,
+                            "arguments": json.dumps(tool_res.arguments)
                         }
                     }]
                 })
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": "call_123",
-                    "name": request.tool_response.tool_name,
-                    "content": request.tool_response.content
-                })
-            else:
-                messages.append({
-                    "role": "user",
-                    "content": request.prompt
+                    "tool_call_id": call_id,
+                    "name": tool_res.tool_name,
+                    "content": tool_res.content
                 })
 
             response = groq_service.generate_content(model=actual_model, messages=messages)
@@ -128,20 +122,20 @@ async def chat_endpoint(request: ChatRequest):
                 types.Content(role="user", parts=[types.Part.from_text(text=request.prompt)])
             ]
 
-            if request.tool_response:
+            for tool_res in request.tool_history:
                 contents.append(
                     types.Content(role="model", parts=[
                         types.Part.from_function_call(
-                            name=request.tool_response.tool_name, 
-                            args=request.tool_response.arguments 
+                            name=tool_res.tool_name, 
+                            args=tool_res.arguments 
                         )
                     ])
                 )
                 contents.append(
                     types.Content(role="user", parts=[
                         types.Part.from_function_response(
-                            name=request.tool_response.tool_name,
-                            response={"content": request.tool_response.content}
+                            name=tool_res.tool_name,
+                            response={"content": tool_res.content}
                         )
                     ])
                 )
@@ -155,31 +149,31 @@ async def chat_endpoint(request: ChatRequest):
             except Exception as e:
                 print(f"Gemini quota fully exhausted/error: {e}. Falling back to Groq.")
                 # We reuse the Groq message formatting from above
-                fallback_model = "llama-3.1-70b-versatile"
+                fallback_model = "llama-3.1-8b-instant" #"llama-3.1-70b-versatile"
                 messages = [{"role": "system", "content": system_instruction}]
                 
-                if request.tool_response:
-                    messages.append({"role": "user", "content": request.prompt})
+                messages.append({"role": "user", "content": request.prompt})
+                
+                for i, tool_res in enumerate(request.tool_history):
+                    call_id = f"call_fallback_{i}"
                     messages.append({
                         "role": "assistant",
                         "content": None,
                         "tool_calls": [{
-                            "id": "call_fallback",
+                            "id": call_id,
                             "type": "function",
                             "function": {
-                                "name": request.tool_response.tool_name,
-                                "arguments": json.dumps(request.tool_response.arguments)
+                                "name": tool_res.tool_name,
+                                "arguments": json.dumps(tool_res.arguments)
                             }
                         }]
                     })
                     messages.append({
                         "role": "tool",
-                        "tool_call_id": "call_fallback",
-                        "name": request.tool_response.tool_name,
-                        "content": request.tool_response.content
+                        "tool_call_id": call_id,
+                        "name": tool_res.tool_name,
+                        "content": tool_res.content
                     })
-                else:
-                    messages.append({"role": "user", "content": request.prompt})
 
                 # Call Groq instead
                 fallback_response = groq_service.generate_content(model=fallback_model, messages=messages)

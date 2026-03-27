@@ -56,7 +56,8 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
             webviewView.webview.postMessage({ type: 'setLoading', text: 'Thinking...' });
 
             // 2. The initial payload
-            let currentPayload: any = { prompt, model, workspace: workspacePath };
+            let toolHistory: any[] = [];
+            let currentPayload: any = { prompt, model, workspace: workspacePath, tool_history: toolHistory };
             let isDone = false;
             let finalResponseText = "No response field returned.";
 
@@ -112,15 +113,16 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                     webviewView.webview.postMessage({ type: 'setLoading', text: 'Analyzing results...' });
 
                     // Update the payload for the NEXT iteration of the loop
+                    toolHistory.push({
+                        tool_name: toolName,
+                        content: toolResultContent,
+                        arguments: toolArgs
+                    });
                     currentPayload = {
                         prompt: prompt,
                         model: model,
                         workspace: workspacePath,
-                        tool_response: {
-                            tool_name: toolName,
-                            content: toolResultContent,
-                            arguments: toolArgs
-                        }
+                        tool_history: toolHistory
                     };
                 }
                 // Scenario B: Gemini is finished and gives us the final text
