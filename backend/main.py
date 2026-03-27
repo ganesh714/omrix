@@ -146,12 +146,60 @@ async def chat_endpoint(request: ChatRequest):
                     ])
                 )
             
-            response = gemini_service.generate_content(
-                model=actual_model,
-                contents=contents,
-                config=config
-            )
+            try:
+                response = gemini_service.generate_content(
+                    model=actual_model,
+                    contents=contents,
+                    config=config
+                )
+            except Exception as e:
+                print(f"Gemini quota fully exhausted/error: {e}. Falling back to Groq.")
+                # We reuse the Groq message formatting from above
+                fallback_model = "llama-3.1-70b-versatile"
+                messages = [{"role": "system", "content": system_instruction}]
+                
+                if request.tool_response:
+                    messages.append({"role": "user", "content": request.prompt})
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "call_fallback",
+                            "type": "function",
+                            "function": {
+                                "name": request.tool_response.tool_name,
+                                "arguments": json.dumps(request.tool_response.arguments)
+                            }
+                        }]
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": "call_fallback",
+                        "name": request.tool_response.tool_name,
+                        "content": request.tool_response.content
+                    })
+                else:
+                    messages.append({"role": "user", "content": request.prompt})
+
+                # Call Groq instead
+                fallback_response = groq_service.generate_content(model=fallback_model, messages=messages)
+
+                if fallback_response.tool_calls:
+                    tool_call = fallback_response.tool_calls[0].function
+                    return {
+                        "type": "tool_call",
+                        "tool_name": tool_call.name,
+                        "arguments": json.loads(tool_call.arguments)
+                    }
+                elif fallback_response.content:
+                    return {
+                        "type": "message",
+                        "content": fallback_response.content
+                    }
+                else:
+                    return {"type": "message", "content": "Received an empty response from Groq fallback."}
             
+            # If Gemini succeeds normally
             if response.function_calls:
                 tool_call = response.function_calls[0]
                 return {
