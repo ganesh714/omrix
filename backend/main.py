@@ -238,6 +238,11 @@ async def chat_endpoint(request: ChatRequest):
             # map default backwards compatibility
             selected_model = 'gemini'
             
+        # Create round-robin list prioritizing the selected model
+        models = ['gemini', 'grok', 'ollama']
+        models.remove(selected_model)
+        round_robin_order = [selected_model] + models
+        
         # Prune context to stay within free-tier limits (8k total tokens is safe for a 12k limit)
         safe_request = prune_context(request, max_tokens=8000)
         
