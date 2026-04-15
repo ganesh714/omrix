@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' {{styleUri}}; script-src 'nonce-{{nonce}}' https://cdn.jsdelivr.net;">
+    <link href="{{styleUri}}" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <title>Omrix Chat</title>
+</head>
+<body>
+    <div id="chat-history">
+        <div class="message bot-message">Hello! I am Omrix. How can I assist you today?</div>
+    </div>
+    
+    <div id="input-wrapper">
+        <div id="copilot-input-box">
+            <textarea id="prompt-input" placeholder="Ask Omrix something..." rows="1"></textarea>
+            
+            <div id="input-toolbar">
+                <div class="toolbar-left">
+                    <button class="icon-button" title="Attach context (future)">+</button>
+                    <select class="toolbar-select" title="Mode (future)">
+                        <option value="chat">Chat</option>
+                    </select>
+                    <select id="model-selector" class="toolbar-select" title="Model">
+                        <option value="gemini">Gemini</option>
+                        <option value="grok">Grok</option>
+                        <option value="ollama">Ollama</option>
+                    </select>
+                </div>
+                <div class="toolbar-right">
+                    <button id="send-button" class="icon-button send-button" title="Send message">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                            <path fill-rule="evenodd" clip-rule="evenodd" d="M8.354 1.146a.5.5 0 0 0-.708 0l-6 6a.5.5 0 0 0 .708.708L7.5 2.707V14.5a.5.5 0 0 0 1 0V2.707l5.146 5.147a.5.5 0 0 0 .708-.708l-6-6z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+</body>
+</html>
