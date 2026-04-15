@@ -17,6 +17,8 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
 
     private _view?: vscode.WebviewView;
     private _chatHistory: { role: 'user' | 'bot', text: string }[] = [];
+    // Stores resolve/reject callbacks for pending file edit approvals
+    private _pendingApprovals = new Map<string, { resolve: (approved: boolean) => void }>();
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -42,6 +44,12 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
         webviewView.webview.onDidReceiveMessage(async (message) => {
             if (message.type === 'prompt') {
                 await this.handlePrompt(message.text, message.model, webviewView);
+            } else if (message.type === 'approveEdit' || message.type === 'rejectEdit') {
+                const pending = this._pendingApprovals.get(message.id);
+                if (pending) {
+                    pending.resolve(message.type === 'approveEdit');
+                    this._pendingApprovals.delete(message.id);
+                }
             }
         });
     }
@@ -121,12 +129,48 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                             let fileContent = new TextDecoder().decode(uint8Array);
                             const oldText = toolArgs.old_text;
                             const newText = toolArgs.new_text;
-                            if (fileContent.includes(oldText)) {
-                                fileContent = fileContent.replace(oldText, newText);
-                                await vscode.workspace.fs.writeFile(targetUri, new TextEncoder().encode(fileContent));
-                                toolResultContent = `Successfully replaced exact text string in ${targetPath}`;
-                            } else {
+
+                            if (!fileContent.includes(oldText)) {
                                 toolResultContent = `Error: Exact old_text string not found in ${targetPath}. Consider reading the file again to check whitespace/formatting.`;
+                            } else {
+                                // --- HUMAN-IN-THE-LOOP APPROVAL ---
+                                // Generate a unique ID for this specific edit request
+                                const editId = `edit_${Date.now()}`;
+
+                                // Ask the webview to show the diff and pause the loop
+                                webviewView.webview.postMessage({
+                                    type: 'askApproval',
+                                    id: editId,
+                                    target: targetPath,
+                                    oldText,
+                                    newText
+                                });
+
+                                // Pause here and wait for the user's decision
+                                const approved = await new Promise<boolean>((resolve) => {
+                                    this._pendingApprovals.set(editId, { resolve });
+                                });
+
+                                if (approved) {
+                                    // Apply via WorkspaceEdit so the file is unsaved and Ctrl+Z works
+                                    const document = await vscode.workspace.openTextDocument(targetUri);
+                                    const idx = document.getText().indexOf(oldText);
+                                    const startPos = document.positionAt(idx);
+                                    const endPos = document.positionAt(idx + oldText.length);
+                                    const range = new vscode.Range(startPos, endPos);
+
+                                    const edit = new vscode.WorkspaceEdit();
+                                    edit.replace(targetUri, range, newText);
+                                    await vscode.workspace.applyEdit(edit);
+
+                                    // Show the file to the user
+                                    await vscode.window.showTextDocument(document, { preview: false });
+
+                                    toolResultContent = `Successfully applied edit to ${targetPath}. The file is unsaved — the user can press Ctrl+Z to undo.`;
+                                } else {
+                                    toolResultContent = `User rejected the edit to ${targetPath}. Do not attempt this edit again.`;
+                                }
+                                // -----------------------------------
                             }
                         } else if (toolName === 'list_directory') {
                             const entries = await vscode.workspace.fs.readDirectory(targetUri);

@@ -12,6 +12,10 @@
     window.addEventListener('message', event => {
         const message = event.data;
         switch (message.type) {
+            case 'askApproval':
+                showDiffApproval(message.id, message.target, message.oldText, message.newText);
+                chatHistory.scrollTop = chatHistory.scrollHeight;
+                break;
             case 'startBotMessage':
                 currentBotContainer = document.createElement('div');
                 currentBotContainer.className = 'message bot-message';
@@ -98,6 +102,77 @@
         
         chatHistory.appendChild(msgDiv);
         chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+
+    function showDiffApproval(id, target, oldText, newText) {
+        const block = document.createElement('div');
+        block.className = 'diff-approval-block';
+        block.dataset.id = id;
+
+        // Header showing which file is being changed
+        const label = document.createElement('div');
+        label.className = 'diff-file-label';
+        label.innerHTML = `<span>✏️</span> <code>${target}</code>`;
+        block.appendChild(label);
+
+        // Diff body: show removed lines (old) then added lines (new)
+        const body = document.createElement('div');
+        body.className = 'diff-body';
+
+        const renderLines = (text, cssClass, marker) => {
+            text.split('\n').forEach(line => {
+                const lineEl = document.createElement('div');
+                lineEl.className = `diff-line ${cssClass}`;
+                lineEl.innerHTML = `<span class="diff-line-marker">${marker}</span><span>${escapeHtml(line)}</span>`;
+                body.appendChild(lineEl);
+            });
+        };
+
+        renderLines(oldText, 'diff-line-removed', '-');
+        renderLines(newText, 'diff-line-added', '+');
+        block.appendChild(body);
+
+        // Action buttons row
+        const actions = document.createElement('div');
+        actions.className = 'diff-actions';
+
+        const acceptBtn = document.createElement('button');
+        acceptBtn.className = 'diff-btn diff-btn-accept';
+        acceptBtn.textContent = 'Accept';
+
+        const rejectBtn = document.createElement('button');
+        rejectBtn.className = 'diff-btn diff-btn-reject';
+        rejectBtn.textContent = 'Reject';
+
+        const resolveBlock = (accepted) => {
+            acceptBtn.disabled = true;
+            rejectBtn.disabled = true;
+            // Replace action row with resolved label
+            actions.innerHTML = '';
+            const resolved = document.createElement('div');
+            resolved.className = 'diff-resolved-label';
+            resolved.textContent = accepted ? '✅ Edit accepted' : '❌ Edit rejected';
+            block.appendChild(resolved);
+
+            vscode.postMessage({ type: accepted ? 'approveEdit' : 'rejectEdit', id });
+        };
+
+        acceptBtn.addEventListener('click', () => resolveBlock(true));
+        rejectBtn.addEventListener('click', () => resolveBlock(false));
+
+        actions.appendChild(acceptBtn);
+        actions.appendChild(rejectBtn);
+        block.appendChild(actions);
+
+        chatHistory.appendChild(block);
+    }
+
+    function escapeHtml(text) {
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
     }
 
     function sendPrompt() {

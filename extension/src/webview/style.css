@@ -208,3 +208,108 @@ pre code { padding: 0; background-color: transparent; border: none; }
     background-color: var(--vscode-dropdown-background);
     color: var(--vscode-dropdown-foreground);
 }
+
+/* ---- Diff Approval Block ---- */
+.diff-approval-block {
+    align-self: flex-start;
+    width: 90%;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 6px;
+    overflow: hidden;
+    font-family: var(--vscode-editor-font-family);
+    font-size: 0.9em;
+    margin: 4px 0;
+}
+
+.diff-file-label {
+    padding: 5px 10px;
+    background-color: var(--vscode-editorWidget-background);
+    border-bottom: 1px solid var(--vscode-widget-border);
+    font-size: 0.85em;
+    color: var(--vscode-descriptionForeground);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.diff-body {
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.diff-line {
+    padding: 2px 10px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.5;
+    display: flex;
+    gap: 8px;
+}
+
+.diff-line-removed {
+    background-color: rgba(220, 38, 38, 0.15);
+    color: var(--vscode-editor-foreground);
+}
+
+.diff-line-added {
+    background-color: rgba(34, 197, 94, 0.15);
+    color: var(--vscode-editor-foreground);
+}
+
+.diff-line-marker {
+    opacity: 0.6;
+    user-select: none;
+    flex-shrink: 0;
+    width: 12px;
+}
+
+.diff-actions {
+    display: flex;
+    gap: 8px;
+    padding: 8px 10px;
+    background-color: var(--vscode-editorWidget-background);
+    border-top: 1px solid var(--vscode-widget-border);
+}
+
+.diff-btn {
+    padding: 4px 14px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.85em;
+    font-weight: 600;
+    transition: opacity 0.15s;
+}
+
+.diff-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.diff-btn-accept {
+    background-color: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+}
+
+.diff-btn-accept:hover:not(:disabled) {
+    background-color: var(--vscode-button-hoverBackground);
+}
+
+.diff-btn-reject {
+    background-color: transparent;
+    color: var(--vscode-errorForeground);
+    border-color: var(--vscode-errorForeground);
+}
+
+.diff-btn-reject:hover:not(:disabled) {
+    background-color: rgba(220, 38, 38, 0.1);
+}
+
+.diff-resolved-label {
+    font-size: 0.8em;
+    padding: 6px 10px;
+    opacity: 0.6;
+    background-color: var(--vscode-editorWidget-background);
+    border-top: 1px solid var(--vscode-widget-border);
+}
