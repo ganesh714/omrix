@@ -54,6 +54,42 @@ from clients.ollama_client import OllamaClient
 ollama_client = OllamaClient()
 
 # =====================================================================
+# Helpers & Context Management
+# =====================================================================
+
+def estimate_tokens(text: str) -> int:
+    """Rough estimation of tokens: ~4 chars per token."""
+    return len(text) // 4
+
+def prune_context(request: ChatRequest, max_tokens: int = 8000) -> ChatRequest:
+    """
+    Truncates tool results and drops old chat history to fit within max_tokens.
+    """
+    import copy
+    new_request = copy.deepcopy(request)
+    
+    # 1. Truncate individual tool results to a sane limit (e.g. 10k chars / ~2.5k tokens)
+    MAX_TOOL_CHARS = 10000 
+    for tool_res in new_request.tool_history:
+        if len(tool_res.content) > MAX_TOOL_CHARS:
+            tool_res.content = tool_res.content[:MAX_TOOL_CHARS] + "\n\n[Content truncated by Omrix to save tokens...]"
+            
+    # 2. Estimate current total
+    def calc_total():
+        total = estimate_tokens(new_request.prompt)
+        total += sum(estimate_tokens(msg["text"]) for msg in new_request.chat_history)
+        total += sum(estimate_tokens(t.content) for t in new_request.tool_history)
+        return total
+
+    # 3. Drop oldest chat history if still too large
+    while calc_total() > max_tokens and len(new_request.chat_history) > 1:
+        # Keep the system instruction/initial prompt if it was there? 
+        # Actually chat_history is just the conversation.
+        new_request.chat_history.pop(0)
+        
+    return new_request
+
+# =====================================================================
 # API Endpoints
 # =====================================================================
 
@@ -202,22 +238,32 @@ async def chat_endpoint(request: ChatRequest):
             # map default backwards compatibility
             selected_model = 'gemini'
             
-        # Create round-robin list prioritizing the selected model
-        models = ['gemini', 'grok', 'ollama']
-        models.remove(selected_model)
-        round_robin_order = [selected_model] + models
+        # Prune context to stay within free-tier limits (8k total tokens is safe for a 12k limit)
+        safe_request = prune_context(request, max_tokens=8000)
         
         last_error = None
         for m in round_robin_order:
             print(f"DEBUG: Attempting model '{m}'")
             try:
                 if m == 'gemini':
-                    return call_gemini(request, system_instruction)
+                    return call_gemini(safe_request, system_instruction)
                 elif m == 'grok':
-                    return call_groq(request, system_instruction)
+                    return call_groq(safe_request, system_instruction)
                 elif m == 'ollama':
-                    return await call_ollama(request, system_instruction)
+                    return await call_ollama(safe_request, system_instruction)
             except Exception as e:
+                error_str = str(e)
+                # If we still hit a 'Request too large' / 413, try one final aggressive prune
+                if "413" in error_str or "too large" in error_str.lower():
+                    print("DEBUG: Payload too large, trying one final aggressive prune...")
+                    tiny_request = prune_context(safe_request, max_tokens=3000)
+                    try:
+                        if m == 'gemini': return call_gemini(tiny_request, system_instruction)
+                        if m == 'grok': return call_groq(tiny_request, system_instruction)
+                        if m == 'ollama': return await call_ollama(tiny_request, system_instruction)
+                    except Exception as inner_e:
+                        print(f"DEBUG: Aggressive prune also failed for '{m}': {inner_e}")
+                
                 print(f"DEBUG: Model '{m}' failed with error: {e}")
                 last_error = e
                 continue

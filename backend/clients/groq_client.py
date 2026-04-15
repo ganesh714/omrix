@@ -148,14 +148,14 @@ class GroqRotatorClient:
                 return chat_completion.choices[0].message
             except Exception as e:
                 error_msg = str(e).lower()
-                # Check for rate limit / 429 errors from Groq
-                if "429" in error_msg or "rate limit" in error_msg:
-                    logger.error(f"Groq API key index {self.current_index} rate-limited (429). Generating content failed.")
+                # Check for rate limit (429) or payload size (413) errors from Groq
+                if "429" in error_msg or "rate limit" in error_msg or "413" in error_msg or "too large" in error_msg:
+                    logger.error(f"Groq API key index {self.current_index} failed (quota or size).")
                     self.rotate_client()
                     attempts += 1
                     last_exception = e
                 else:
-                    # Reraise immediately if it's not a rate limit
+                    # Reraise immediately if it's not a rate/size limit
                     raise e
         
         logger.critical(f"All {max_retries} Groq API keys have exhausted limits.")
