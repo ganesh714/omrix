@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { TextDecoder, TextEncoder } from 'util';
 
 export function activate(context: vscode.ExtensionContext) {
     const provider = new OmrixChatProvider(context.extensionUri);
@@ -362,8 +363,9 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
 <body>
     <div id="header">
         <select id="model-selector">
-            <option value="omrix">Omrix (Gemini)</option>
-            <option value="expert">Local Expert</option>
+            <option value="gemini">Gemini</option>
+            <option value="grok">Grok</option>
+            <option value="ollama">Ollama</option>
         </select>
     </div>
 
