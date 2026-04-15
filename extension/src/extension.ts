@@ -308,23 +308,22 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
         // Path to the webview directory
         const webviewPath = path.join(this._extensionUri.fsPath, 'src', 'webview');
 
-        // Read the HTML template
+        // Read the HTML template and CSS separately
         const htmlPath = path.join(webviewPath, 'index.html');
-        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
-
-        // Local paths for CSS and JS
-        const stylePathOnDisk = vscode.Uri.file(path.join(webviewPath, 'style.css'));
+        const cssPath = path.join(webviewPath, 'style.css');
         const scriptPathOnDisk = vscode.Uri.file(path.join(webviewPath, 'main.js'));
 
-        // Map them to URIs for Webview loading
-        const styleUri = webview.asWebviewUri(stylePathOnDisk);
+        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+        const cssContent = fs.readFileSync(cssPath, 'utf8');
+
+        // Map the JS file to a Webview-safe URI
         const scriptUri = webview.asWebviewUri(scriptPathOnDisk);
 
         // Generate a random nonce for CSP
         const nonce = getNonce();
 
-        // Inject URIs into HTML
-        htmlContent = htmlContent.replace(/{{styleUri}}/g, styleUri.toString());
+        // Inline the CSS and inject URIs
+        htmlContent = htmlContent.replace('{{inlineStyles}}', cssContent);
         htmlContent = htmlContent.replace(/{{scriptUri}}/g, scriptUri.toString());
         htmlContent = htmlContent.replace(/{{nonce}}/g, nonce);
 
