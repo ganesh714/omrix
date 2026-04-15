@@ -230,7 +230,10 @@ async def chat_endpoint(request: ChatRequest):
             "If you need to find a 'serverUrl', you must search for it using `search_in_files` or by using `list_directory` recursively until you find the relevant file. "
             "Never guess or give generic advice if you can read their actual code. "
             "IMPORTANT: After using a tool, you should immediately use other tools (like 'modify_file') to finish the request if enough information or context has been gathered. "
-            "Do NOT wait for the user to confirm after reading a file if you already know what needs to be changed. Be proactive and finish the entire objective autonomously."
+            "Do NOT wait for the user to confirm after reading a file if you already know what needs to be changed. Be proactive and finish the entire objective autonomously.\n"
+            "CRITICAL RULES FOR FILE MODIFICATION:\n"
+            "1. REJECTIONS: If a tool returns 'CRITICAL ALERT: The user EXPLICITLY REJECTED', you MUST STOP immediately. Do NOT retry the edit. Do NOT try a different way. Explain what you were trying to do and ask the user for guidance.\n"
+            "2. SYNTAX: NEVER construct invalid variable names. Do not use IPs or arbitrary strings as variable declarations (e.g., NEVER do 'const 192.168.1.35 = ...'). Only modify the *value* of the variable being assigned, leaving the variable name perfectly intact."
         )
 
         selected_model = request.model.lower()

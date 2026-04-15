@@ -168,7 +168,7 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
 
                                     toolResultContent = `Successfully applied edit to ${targetPath}. The file is unsaved — the user can press Ctrl+Z to undo.`;
                                 } else {
-                                    toolResultContent = `User rejected the edit to ${targetPath}. Do not attempt this edit again.`;
+                                    toolResultContent = `CRITICAL ALERT: The user EXPLICITLY REJECTED your proposed edit to ${targetPath}. FORBIDDEN: You must abandon this change immediately. DO NOT retry or rephrase the edit. Stop and ask the user for clarification.`;
                                 }
                                 // -----------------------------------
                             }
