@@ -66,6 +66,23 @@ groq_tools = [
                 "required": ["relative_path", "old_text", "new_text"],
             },
         },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_in_files",
+            "description": "Searches for a specific string or pattern across all files in the workspace. Use this to find variables, configurations, or specific code snippets.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The text or string to search for.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
     }
 ]
 

@@ -58,7 +58,7 @@ ollama_client = OllamaClient()
 # =====================================================================
 
 def call_groq(request: ChatRequest, system_instruction: str):
-    actual_model = "llama-3.1-70b-versatile" # default groq model since grok uses this in their setup
+    actual_model = "llama-3.3-70b-versatile" # updated from decommissioned model
     messages = [{"role": "system", "content": system_instruction}]
     for msg in request.chat_history:
         role = "user" if msg["role"] == "user" else "assistant"
@@ -153,24 +153,34 @@ def call_gemini(request: ChatRequest, system_instruction: str):
         print("DEBUG: Gemini returned empty text and no function calls.")
         return {"type": "message", "content": "I have processed the data. Based on what I see, let me know if you would like me to continue with a file modification or if there's anything else I can do!"}
 
+from clients.ollama_client import get_ollama_tools
+
 async def call_ollama(request: ChatRequest, system_instruction: str):
     history = []
-    # System instruction isn't directly supported in the simple history format in ollama_client,
-    # but we can pass it as a system message
+    # System instruction as system message
     history.append({"role": "system", "content": system_instruction})
     for msg in request.chat_history:
         role = "user" if msg["role"] == "user" else "assistant"
         history.append({"role": role, "content": msg["text"]})
         
-    # Ollama currently doesn't support our tool loop natively in the same way,
-    # so we just prepend tool history to the prompt if any exists
-    tool_text = ""
-    for tool in request.tool_history:
-        tool_text += f"\nTool {tool.tool_name} returned: {tool.content}"
-        
-    final_prompt = request.prompt + tool_text
+    for tool_res in request.tool_history:
+        # Prepend tool history as assistant/tool messages if supported, 
+        # but for simplicity we keep them as part of the context.
+        history.append({"role": "assistant", "content": f"Tool call: {tool_res.tool_name}({tool_res.arguments})"})
+        history.append({"role": "user", "content": f"Tool result: {tool_res.content}"})
     
-    response_text = await ollama_client.generate_response(prompt=final_prompt, history=history)
+    ollama_tools = get_ollama_tools()
+    message = await ollama_client.generate_response(prompt=request.prompt, history=history, tools=ollama_tools)
+    
+    if "tool_calls" in message and message["tool_calls"]:
+        tool_call = message["tool_calls"][0]["function"]
+        return {
+            "type": "tool_call",
+            "tool_name": tool_call["name"],
+            "arguments": tool_call["arguments"]
+        }
+    
+    response_text = message.get("content", "")
     print(f"DEBUG: Ollama Response: {response_text[:100]}...")
     return {"type": "message", "content": response_text}
 
@@ -180,9 +190,9 @@ async def chat_endpoint(request: ChatRequest):
         system_instruction = (
             "You are Omrix, an expert AI coding assistant integrated into VS Code. "
             f"The user's current workspace directory is: {request.workspace}. "
-            "If the user asks about their project, folders (like 'frontend', 'backend'), or files, "
-            "you MUST use your `list_directory` and `read_file` tools to investigate the filesystem "
-            "BEFORE answering. Never guess or give generic advice if you can read their actual code. "
+            "You are FORBIDDEN from mentioning any filename that has not been explicitly returned by a tool in the current session. "
+            "If you need to find a 'serverUrl', you must search for it using `search_in_files` or by using `list_directory` recursively until you find the relevant file. "
+            "Never guess or give generic advice if you can read their actual code. "
             "IMPORTANT: After using a tool, you should immediately use other tools (like 'modify_file') to finish the request if enough information or context has been gathered. "
             "Do NOT wait for the user to confirm after reading a file if you already know what needs to be changed. Be proactive and finish the entire objective autonomously."
         )

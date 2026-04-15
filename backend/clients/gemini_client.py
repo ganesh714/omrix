@@ -61,6 +61,20 @@ agent_tools = [
                     },
                     required=["relative_path", "old_text", "new_text"]
                 )
+            ),
+            types.FunctionDeclaration(
+                name="search_in_files",
+                description="Searches for a specific string or pattern across all files in the workspace. Use this to find variables, configurations, or specific code snippets.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "query": types.Schema(
+                            type=types.Type.STRING,
+                            description="The text or string to search for."
+                        )
+                    },
+                    required=["query"]
+                )
             )
         ]
     )

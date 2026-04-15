@@ -59,12 +59,15 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
 
             // 2. The initial payload
             let toolHistory: any[] = [];
+            let verifiedFiles = new Set<string>();
+            let verificationRetryCount = 0;
+            const MAX_VERIFICATION_RETRIES = 2;
             let currentPayload: any = { 
                 prompt, 
                 model, 
                 workspace: workspacePath, 
                 tool_history: toolHistory,
-                chat_history: this._chatHistory 
+                chat_history: [...this._chatHistory] // Clone history
             };
             let isDone = false;
             let finalResponseText = "No response field returned.";
@@ -96,6 +99,8 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                         webviewView.webview.postMessage({ type: 'addStep', icon: '📄', action: 'Reading file', target: targetPath });
                     } else if (toolName === 'modify_file') {
                         webviewView.webview.postMessage({ type: 'addStep', icon: '✏️', action: 'Editing file', target: targetPath });
+                    } else if (toolName === 'search_in_files') {
+                        webviewView.webview.postMessage({ type: 'addStep', icon: '🔍', action: 'Searching workspace', target: toolArgs.query });
                     } else {
                         webviewView.webview.postMessage({ type: 'addStep', icon: '📂', action: 'Scanning directory', target: targetPath });
                     }
@@ -126,6 +131,25 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                         } else if (toolName === 'list_directory') {
                             const entries = await vscode.workspace.fs.readDirectory(targetUri);
                             toolResultContent = entries.map(([name, type]) => type === vscode.FileType.Directory ? `[Folder] ${name}` : `[File] ${name}`).join('\n');
+                        } else if (toolName === 'search_in_files') {
+                            const query = toolArgs.query;
+                            const files = await vscode.workspace.findFiles('**/*', '**/node_modules/**');
+                            let matches: string[] = [];
+                            
+                            for (const file of files) {
+                                try {
+                                    const uint8Array = await vscode.workspace.fs.readFile(file);
+                                    const content = new TextDecoder().decode(uint8Array);
+                                    if (content.includes(query)) {
+                                        matches.push(vscode.workspace.asRelativePath(file));
+                                    }
+                                } catch (e) {
+                                    // Skip files that can't be read (e.g. binaries)
+                                }
+                                // Limit results to avoid token overflow
+                                if (matches.length > 20) break; 
+                            }
+                            toolResultContent = matches.length > 0 ? matches.join('\n') : "No matches found.";
                         }
                     } catch (err: any) {
                         toolResultContent = `Error executing tool: ${err.message}`;
@@ -140,17 +164,78 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                         content: toolResultContent,
                         arguments: toolArgs
                     });
+                    
+                    // --- TRACK VERIFIED FILES ---
+                    if (toolName === 'list_directory') {
+                        const lines = toolResultContent.split('\n');
+                        lines.forEach(line => {
+                            if (line.includes('[File] ')) {
+                                const fileName = line.replace('[File] ', '').trim();
+                                verifiedFiles.add(path.join(targetPath, fileName).replace(/\\/g, '/'));
+                            }
+                        });
+                    } else if (toolName === 'read_file' || toolName === 'modify_file') {
+                        verifiedFiles.add(targetPath.replace(/\\/g, '/'));
+                    } else if (toolName === 'search_in_files') {
+                        const files = toolResultContent.split('\n');
+                        files.forEach(f => verifiedFiles.add(f.trim().replace(/\\/g, '/')));
+                    }
+                    // ----------------------------
+
                     currentPayload = {
                         prompt: prompt,
                         model: model,
                         workspace: workspacePath,
-                        tool_history: toolHistory
+                        tool_history: toolHistory,
+                        chat_history: currentPayload.chat_history // Keep history if any
                     };
                 }
-                // Scenario B: Gemini is finished and gives us the final text
+                // Scenario B: AI is finished and gives us the final text
                 else if (data.type === 'message') {
-                    finalResponseText = data.content || "Empty response from Gemini.";
-                    isDone = true;
+                    const messageContent = data.content || "";
+                    
+                    // --- VERIFICATION LOOP ---
+                    // Regex to find potential filenames (word.extension)
+                    const fileRegex = /\b[\w\-]+\.(html|js|ts|py|css|json|md|txt|sh)\b/g;
+                    const mentions = messageContent.match(fileRegex) || [];
+                    let unverifiedFile = "";
+                    
+                    for (const mention of mentions) {
+                        // Check if this file was ever "seen" by a tool
+                        // We check both the exact mention and if any verified path ends with this mention
+                        const isVerified = Array.from(verifiedFiles).some(vf => vf === mention || vf.endsWith('/' + mention) || vf.endsWith('\\' + mention));
+                        
+                        if (!isVerified) {
+                            unverifiedFile = mention;
+                            break;
+                        }
+                    }
+                    
+                    if (unverifiedFile && verificationRetryCount < MAX_VERIFICATION_RETRIES) {
+                        const feedbackPrompt = `I noticed you mentioned \`${unverifiedFile}\`, but that file was never found in the directory listing. Please list the directory first to verify.`;
+                        verificationRetryCount++;
+                        
+                        // Injection: Add the AI's "guessed" message and our correction to the history
+                        if (!currentPayload.chat_history) currentPayload.chat_history = [];
+                        currentPayload.chat_history.push({ role: 'user', text: prompt });
+                        currentPayload.chat_history.push({ role: 'bot', text: messageContent });
+                        
+                        // Update current prompt to the feedback
+                        prompt = feedbackPrompt; 
+                        currentPayload.prompt = prompt;
+                        
+                        // Log the correction in the UI (optional but helpful)
+                        webviewView.webview.postMessage({ type: 'addStep', icon: '⚠️', action: 'Verification failed', target: unverifiedFile });
+                        webviewView.webview.postMessage({ type: 'setLoading', text: `Re-verifying filenames (Attempt ${verificationRetryCount})...` });
+                        
+                        // Do NOT set isDone = true, loop continues
+                    } else {
+                        if (unverifiedFile && verificationRetryCount >= MAX_VERIFICATION_RETRIES) {
+                             console.warn(`Max verification retries reached for ${unverifiedFile}. Finishing anyway.`);
+                        }
+                        finalResponseText = messageContent || "Empty response from AI.";
+                        isDone = true;
+                    }
                 }
                 else {
                     finalResponseText = "Unknown response type from server.";
