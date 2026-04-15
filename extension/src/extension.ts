@@ -281,33 +281,7 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
             overflow: hidden;
         }
 
-        #header {
-            padding: 8px 16px;
-            background-color: var(--vscode-editorWidget-background);
-            border-bottom: 1px solid var(--vscode-widget-border);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
-
-        #model-selector {
-            background-color: var(--vscode-dropdown-background);
-            color: var(--vscode-dropdown-foreground);
-            border: 1px solid var(--vscode-dropdown-border);
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-family: inherit;
-            font-size: 11px;
-            outline: none;
-            width: 100%;
-        }
-
-        #model-selector:focus {
-            border-color: var(--vscode-focusBorder);
-        }
+        /* Header removed - Layout shifted to Copilot-style bottom bar */
 
         #chat-history {
             flex-grow: 1;
@@ -409,58 +383,135 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
 
         .loading { font-style: italic; opacity: 0.7; }
 
-        #input-container {
-            display: flex;
+        #input-wrapper {
             padding: 12px 16px;
-            background-color: var(--vscode-editorWidget-background);
-            border-top: 1px solid var(--vscode-widget-border);
-            gap: 8px;
+            background-color: var(--vscode-editor-background);
+        }
+
+        #copilot-input-box {
+            display: flex;
+            flex-direction: column;
+            background-color: var(--vscode-input-background);
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 6px;
+            padding: 4px;
+            /* Copilot shadow effect */
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+
+        #copilot-input-box:focus-within {
+            border-color: var(--vscode-focusBorder);
         }
 
         #prompt-input {
-            flex-grow: 1;
-            background-color: var(--vscode-input-background);
+            width: 100%;
+            background-color: transparent;
             color: var(--vscode-input-foreground);
-            border: 1px solid var(--vscode-input-border);
-            padding: 8px 12px;
-            border-radius: 4px;
+            border: none;
+            padding: 6px 8px;
             outline: none;
             font-family: inherit;
             font-size: inherit;
+            resize: none;
+            box-sizing: border-box;
+            max-height: 150px;
+            min-height: 32px;
+            overflow-y: auto;
         }
 
-        #prompt-input:focus { border-color: var(--vscode-focusBorder); }
+        #input-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px;
+        }
 
-        #send-button {
-            background-color: var(--vscode-button-background);
-            color: var(--vscode-button-foreground);
+        .toolbar-left, .toolbar-right {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+
+        .icon-button {
+            background: transparent;
+            color: var(--vscode-icon-foreground);
             border: none;
-            padding: 8px 16px;
+            padding: 4px;
             border-radius: 4px;
             cursor: pointer;
-            font-family: inherit;
-            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            font-size: 14px;
+        }
+        
+        .icon-button:hover {
+            background-color: var(--vscode-toolbar-hoverBackground);
         }
 
-        #send-button:hover { background-color: var(--vscode-button-hoverBackground); }
+        .send-button {
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+        }
+        
+        .send-button:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+
+        .toolbar-select {
+            background-color: transparent;
+            color: var(--vscode-descriptionForeground);
+            border: 1px solid transparent;
+            border-radius: 4px;
+            padding: 2px;
+            font-family: inherit;
+            font-size: 11px;
+            outline: none;
+            cursor: pointer;
+        }
+        
+        .toolbar-select:hover {
+            background-color: var(--vscode-toolbar-hoverBackground);
+        }
+        
+        .toolbar-select option {
+            background-color: var(--vscode-dropdown-background);
+            color: var(--vscode-dropdown-foreground);
+        }
     </style>
 </head>
 <body>
-    <div id="header">
-        <select id="model-selector">
-            <option value="gemini">Gemini</option>
-            <option value="grok">Grok</option>
-            <option value="ollama">Ollama</option>
-        </select>
-    </div>
-
     <div id="chat-history">
         <div class="message bot-message">Hello! I am Omrix. How can I assist you today?</div>
     </div>
     
-    <div id="input-container">
-        <input type="text" id="prompt-input" placeholder="Ask Omrix something..." autocomplete="off">
-        <button id="send-button">Send</button>
+    <div id="input-wrapper">
+        <div id="copilot-input-box">
+            <textarea id="prompt-input" placeholder="Ask Omrix something..." rows="1"></textarea>
+            
+            <div id="input-toolbar">
+                <div class="toolbar-left">
+                    <button class="icon-button" title="Attach context (future)">+</button>
+                    <select class="toolbar-select" title="Mode (future)">
+                        <option value="chat">Chat</option>
+                    </select>
+                    <select id="model-selector" class="toolbar-select" title="Model">
+                        <option value="gemini">Gemini</option>
+                        <option value="grok">Grok</option>
+                        <option value="ollama">Ollama</option>
+                    </select>
+                </div>
+                <div class="toolbar-right">
+                    <button id="send-button" class="icon-button send-button" title="Send message">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                            <path fill-rule="evenodd" clip-rule="evenodd" d="M8.354 1.146a.5.5 0 0 0-.708 0l-6 6a.5.5 0 0 0 .708.708L7.5 2.707V14.5a.5.5 0 0 0 1 0V2.707l5.146 5.147a.5.5 0 0 0 .708-.708l-6-6z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -579,14 +630,22 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                     text: text,
                     model: model
                 });
+                // Reset height
+                promptInput.style.height = 'auto';
             }
 
             sendButton.addEventListener('click', sendPrompt);
-            promptInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
+            promptInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     sendPrompt();
                 }
+            });
+            
+            // Auto resize text area
+            promptInput.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = (this.scrollHeight) + 'px';
             });
 
             promptInput.focus();
