@@ -19,6 +19,7 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
     private _chatHistory: { role: 'user' | 'bot', text: string }[] = [];
     // Stores resolve/reject callbacks for pending file edit approvals
     private _pendingApprovals = new Map<string, { resolve: (approved: boolean) => void }>();
+    private _abortRequested = false;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -44,6 +45,8 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
         webviewView.webview.onDidReceiveMessage(async (message) => {
             if (message.type === 'prompt') {
                 await this.handlePrompt(message.text, message.model, webviewView);
+            } else if (message.type === 'abortGeneration') {
+                this._abortRequested = true;
             } else if (message.type === 'approveEdit' || message.type === 'rejectEdit') {
                 const pending = this._pendingApprovals.get(message.id);
                 if (pending) {
@@ -55,6 +58,7 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
     }
 
     private async handlePrompt(prompt: string, model: string, webviewView: vscode.WebviewView) {
+        this._abortRequested = false;
         const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
         const API_URL = 'http://localhost:8000/chat';
         const globalFetch = (globalThis as any).fetch;
@@ -79,9 +83,17 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
             };
             let isDone = false;
             let finalResponseText = "No response field returned.";
+            let consecutiveToolCalls = 0;
+            const MAX_CONSECUTIVE_TOOLS = 15;
+            let currentFileEditAttempts = new Map<string, number>();
 
             // 3. THE AGENTIC LOOP
             while (!isDone) {
+                if (this._abortRequested) {
+                    finalResponseText = "Generation stopped by user.";
+                    break;
+                }
+
                 let response = await globalFetch(API_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -226,16 +238,37 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
                     }
                     // ----------------------------
 
-                    currentPayload = {
-                        prompt: prompt,
-                        model: model,
-                        workspace: workspacePath,
-                        tool_history: toolHistory,
-                        chat_history: currentPayload.chat_history // Keep history if any
-                    };
+                    // --- LOOP GUARDS ---
+                    consecutiveToolCalls++;
+                    if (toolName === 'modify_file') {
+                        let attempts = currentFileEditAttempts.get(targetPath) || 0;
+                        attempts++;
+                        currentFileEditAttempts.set(targetPath, attempts);
+                        if (attempts >= 4) {
+                            finalResponseText = `Error: Agentic Loop Blocked. Refused to allow Omrix to edit ${targetPath} more than 3 times in a single request. Process aborted to protect workspace.`;
+                            isDone = true;
+                        }
+                    }
+
+                    if (consecutiveToolCalls > MAX_CONSECUTIVE_TOOLS) {
+                        finalResponseText = `Error: Agentic Loop Blocked. Maximum tool calls (${MAX_CONSECUTIVE_TOOLS}) exceeded. Process aborted to prevent infinite loops.`;
+                        isDone = true;
+                    }
+                    // -------------------
+
+                    if (!isDone) {
+                        currentPayload = {
+                            prompt: prompt,
+                            model: model,
+                            workspace: workspacePath,
+                            tool_history: toolHistory,
+                            chat_history: currentPayload.chat_history // Keep history if any
+                        };
+                    }
                 }
                 // Scenario B: AI is finished and gives us the final text
                 else if (data.type === 'message') {
+                    consecutiveToolCalls = 0; // Reset tool counter if it actually spoke to us
                     const messageContent = data.content || "";
                     
                     // --- VERIFICATION LOOP ---
@@ -289,7 +322,8 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
 
             // 4. Print the final answer to the screen
             webviewView.webview.postMessage({ type: 'removeLoading' });
-            webviewView.webview.postMessage({ type: 'addMessage', text: finalResponseText, isUser: false });
+            webviewView.webview.postMessage({ type: 'generationFinished' });
+            webviewView.webview.postMessage({ type: 'addMessage', text: finalResponseText, isUser: false, isError: this._abortRequested });
 
             // 5. Update persistent history for subsequent turns
             this._chatHistory.push({ role: 'user', text: prompt });
@@ -298,6 +332,7 @@ class OmrixChatProvider implements vscode.WebviewViewProvider {
         } catch (error: any) {
             console.error('Fetch error:', error);
             webviewView.webview.postMessage({ type: 'removeLoading' });
+            webviewView.webview.postMessage({ type: 'generationFinished' });
             webviewView.webview.postMessage({ type: 'addMessage', text: `Error: Failed to connect or execute feature.`, isUser: false, isError: true });
         }
     }

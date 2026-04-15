@@ -182,10 +182,21 @@ pre code { padding: 0; background-color: transparent; border: none; }
 .send-button {
     background-color: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
+    transition: background-color 0.2s;
 }
 
 .send-button:hover {
     background-color: var(--vscode-button-hoverBackground);
+}
+
+.stop-button {
+    background-color: transparent !important;
+    color: var(--vscode-errorForeground) !important;
+    border: 1px solid var(--vscode-errorForeground) !important;
+}
+
+.stop-button:hover {
+    background-color: rgba(220, 38, 38, 0.1) !important;
 }
 
 .toolbar-select {

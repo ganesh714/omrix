@@ -7,6 +7,10 @@
 
     let currentBotContainer = null;
     let currentStepsDetails = null;
+    let isGenerating = false;
+
+    const SEND_ICON = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M8.354 1.146a.5.5 0 0 0-.708 0l-6 6a.5.5 0 0 0 .708.708L7.5 2.707V14.5a.5.5 0 0 0 1 0V2.707l5.146 5.147a.5.5 0 0 0 .708-.708l-6-6z"/></svg>`;
+    const STOP_ICON = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>`;
 
     // Listen for messages from the extension context
     window.addEventListener('message', event => {
@@ -79,6 +83,9 @@
             case 'removeLoading':
                 const loader = document.getElementById('loading-indicator');
                 if (loader) loader.remove();
+                break;
+            case 'generationFinished':
+                setGeneratingState(false);
                 break;
         }
     });
@@ -175,11 +182,34 @@
             .replace(/"/g, '&quot;');
     }
 
+    function setGeneratingState(generating) {
+        isGenerating = generating;
+        if (generating) {
+            sendButton.innerHTML = STOP_ICON;
+            sendButton.title = "Stop generating";
+            sendButton.classList.add('stop-button');
+        } else {
+            sendButton.innerHTML = SEND_ICON;
+            sendButton.title = "Send message";
+            sendButton.classList.remove('stop-button');
+        }
+    }
+
+    function handleSendOrStop() {
+        if (isGenerating) {
+            vscode.postMessage({ type: 'abortGeneration' });
+            setGeneratingState(false);
+        } else {
+            sendPrompt();
+        }
+    }
+
     function sendPrompt() {
         const text = promptInput.value.trim();
         const model = modelSelector.value;
-        if (!text) return;
+        if (!text || isGenerating) return;
 
+        setGeneratingState(true);
         promptInput.value = '';
         
         // Send the message to the extension
@@ -192,11 +222,13 @@
         promptInput.style.height = 'auto';
     }
 
-    sendButton.addEventListener('click', sendPrompt);
+    sendButton.addEventListener('click', handleSendOrStop);
     promptInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            sendPrompt();
+            if (!isGenerating) {
+                sendPrompt();
+            }
         }
     });
     
