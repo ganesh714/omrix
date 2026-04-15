@@ -49,15 +49,134 @@ class ChatRequest(BaseModel):
     chat_history: List[Dict[str, str]] = []
 
 
+# Import OllamaClient at the top if it's missing, but we'll import it here dynamically just in case.
+from clients.ollama_client import OllamaClient
+ollama_client = OllamaClient()
+
 # =====================================================================
 # API Endpoints
 # =====================================================================
 
+def call_groq(request: ChatRequest, system_instruction: str):
+    actual_model = "llama-3.1-70b-versatile" # default groq model since grok uses this in their setup
+    messages = [{"role": "system", "content": system_instruction}]
+    for msg in request.chat_history:
+        role = "user" if msg["role"] == "user" else "assistant"
+        messages.append({"role": role, "content": msg["text"]})
+    
+    messages.append({"role": "user", "content": request.prompt})
+    for i, tool_res in enumerate(request.tool_history):
+        call_id = f"call_{i}"
+        messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": tool_res.tool_name,
+                    "arguments": json.dumps(tool_res.arguments)
+                }
+            }]
+        })
+        messages.append({
+            "role": "tool",
+            "tool_call_id": call_id,
+            "name": tool_res.tool_name,
+            "content": tool_res.content
+        })
+
+    response = groq_service.generate_content(model=actual_model, messages=messages)
+
+    if response.tool_calls:
+        tool_call = response.tool_calls[0].function
+        return {
+            "type": "tool_call",
+            "tool_name": tool_call.name,
+            "arguments": json.loads(tool_call.arguments)
+        }
+    elif response.content:
+        print(f"DEBUG: Groq Response: {response.content[:100]}...")
+        return {"type": "message", "content": response.content}
+    else:
+        return {"type": "message", "content": "Received an empty response from Groq."}
+
+def call_gemini(request: ChatRequest, system_instruction: str):
+    actual_model = "gemini-2.5-pro"
+    config = types.GenerateContentConfig(
+        tools=agent_tools,
+        temperature=0.0,
+        system_instruction=system_instruction
+    )
+    
+    contents = []
+    for msg in request.chat_history:
+        role = "user" if msg["role"] == "user" else "model"
+        contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["text"])]))
+    
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=request.prompt)]))
+
+    for tool_res in request.tool_history:
+        contents.append(
+            types.Content(role="model", parts=[
+                types.Part.from_function_call(
+                    name=tool_res.tool_name, 
+                    args=tool_res.arguments 
+                )
+            ])
+        )
+        contents.append(
+            types.Content(role="user", parts=[
+                types.Part.from_function_response(
+                    name=tool_res.tool_name,
+                    response={"content": tool_res.content}
+                )
+            ])
+        )
+    
+    response = gemini_service.generate_content(
+        model=actual_model,
+        contents=contents,
+        config=config
+    )
+    if response.function_calls:
+        tool_call = response.function_calls[0]
+        return {
+            "type": "tool_call",
+            "tool_name": tool_call.name,
+            "arguments": dict(tool_call.args) if tool_call.args else {}
+        }
+    elif response.text:
+        print(f"DEBUG: Gemini Response: {response.text[:100]}...")
+        return {"type": "message", "content": response.text}
+    else:
+        print("DEBUG: Gemini returned empty text and no function calls.")
+        return {"type": "message", "content": "I have processed the data. Based on what I see, let me know if you would like me to continue with a file modification or if there's anything else I can do!"}
+
+async def call_ollama(request: ChatRequest, system_instruction: str):
+    history = []
+    # System instruction isn't directly supported in the simple history format in ollama_client,
+    # but we can pass it as a system message
+    history.append({"role": "system", "content": system_instruction})
+    for msg in request.chat_history:
+        role = "user" if msg["role"] == "user" else "assistant"
+        history.append({"role": role, "content": msg["text"]})
+        
+    # Ollama currently doesn't support our tool loop natively in the same way,
+    # so we just prepend tool history to the prompt if any exists
+    tool_text = ""
+    for tool in request.tool_history:
+        tool_text += f"\nTool {tool.tool_name} returned: {tool.content}"
+        
+    final_prompt = request.prompt + tool_text
+    
+    response_text = await ollama_client.generate_response(prompt=final_prompt, history=history)
+    print(f"DEBUG: Ollama Response: {response_text[:100]}...")
+    return {"type": "message", "content": response_text}
+
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     try:
-        actual_model = "gemini-2.5-pro" if request.model == "omrix" else request.model
-        print(f"DEBUG: Active Model: {actual_model}")
         system_instruction = (
             "You are Omrix, an expert AI coding assistant integrated into VS Code. "
             f"The user's current workspace directory is: {request.workspace}. "
@@ -68,165 +187,36 @@ async def chat_endpoint(request: ChatRequest):
             "Do NOT wait for the user to confirm after reading a file if you already know what needs to be changed. Be proactive and finish the entire objective autonomously."
         )
 
-        # Route to Groq Client
-        if actual_model.startswith("llama") or actual_model.startswith("mixtral") or actual_model.startswith("gemma"):
-            messages = [{"role": "system", "content": system_instruction}]
+        selected_model = request.model.lower()
+        if selected_model not in ['gemini', 'grok', 'ollama']:
+            # map default backwards compatibility
+            selected_model = 'gemini'
             
-            # Standard OpenAI-style message format for Groq
-            for msg in request.chat_history:
-                role = "user" if msg["role"] == "user" else "assistant"
-                messages.append({"role": role, "content": msg["text"]})
-            
-            messages.append({"role": "user", "content": request.prompt})
-            
-            for i, tool_res in enumerate(request.tool_history):
-                call_id = f"call_{i}"
-                messages.append({
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{
-                        "id": call_id,
-                        "type": "function",
-                        "function": {
-                            "name": tool_res.tool_name,
-                            "arguments": json.dumps(tool_res.arguments)
-                        }
-                    }]
-                })
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "name": tool_res.tool_name,
-                    "content": tool_res.content
-                })
-
-            response = groq_service.generate_content(model=actual_model, messages=messages)
-
-            if response.tool_calls:
-                tool_call = response.tool_calls[0].function
-                return {
-                    "type": "tool_call",
-                    "tool_name": tool_call.name,
-                    "arguments": json.loads(tool_call.arguments)
-                }
-            elif response.content:
-                print(f"DEBUG: Groq Response: {response.content[:100]}...")
-                return {
-                    "type": "message",
-                    "content": response.content
-                }
-            else:
-                return {"type": "message", "content": "Received an empty response from Groq."}
-
-
-        # Route to Gemini Client (Default)
-        else:
-            config = types.GenerateContentConfig(
-                tools=agent_tools,
-                temperature=0.0,
-                system_instruction=system_instruction
-            )
-            
-            contents = []
-            for msg in request.chat_history:
-                role = "user" if msg["role"] == "user" else "model"
-                contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["text"])]))
-            
-            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=request.prompt)]))
-
-            for tool_res in request.tool_history:
-                contents.append(
-                    types.Content(role="model", parts=[
-                        types.Part.from_function_call(
-                            name=tool_res.tool_name, 
-                            args=tool_res.arguments 
-                        )
-                    ])
-                )
-                contents.append(
-                    types.Content(role="user", parts=[
-                        types.Part.from_function_response(
-                            name=tool_res.tool_name,
-                            response={"content": tool_res.content}
-                        )
-                    ])
-                )
-            
+        # Create round-robin list prioritizing the selected model
+        models = ['gemini', 'grok', 'ollama']
+        models.remove(selected_model)
+        round_robin_order = [selected_model] + models
+        
+        last_error = None
+        for m in round_robin_order:
+            print(f"DEBUG: Attempting model '{m}'")
             try:
-                response = gemini_service.generate_content(
-                    model=actual_model,
-                    contents=contents,
-                    config=config
-                )
+                if m == 'gemini':
+                    return call_gemini(request, system_instruction)
+                elif m == 'grok':
+                    return call_groq(request, system_instruction)
+                elif m == 'ollama':
+                    return await call_ollama(request, system_instruction)
             except Exception as e:
-                print(f"Gemini quota fully exhausted/error: {e}. Falling back to Groq.")
-                # We reuse the Groq message formatting from above
-                fallback_model = "llama-3.1-8b-instant" #"llama-3.1-70b-versatile"
-                messages = [{"role": "system", "content": system_instruction}]
-                for msg in request.chat_history:
-                    role = "user" if msg["role"] == "user" else "assistant"
-                    messages.append({"role": role, "content": msg["text"]})
+                print(f"DEBUG: Model '{m}' failed with error: {e}")
+                last_error = e
+                continue
                 
-                messages.append({"role": "user", "content": request.prompt})
-                
-                for i, tool_res in enumerate(request.tool_history):
-                    call_id = f"call_fallback_{i}"
-                    messages.append({
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [{
-                            "id": call_id,
-                            "type": "function",
-                            "function": {
-                                "name": tool_res.tool_name,
-                                "arguments": json.dumps(tool_res.arguments)
-                            }
-                        }]
-                    })
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "name": tool_res.tool_name,
-                        "content": tool_res.content
-                    })
-
-                # Call Groq instead
-                fallback_response = groq_service.generate_content(model=fallback_model, messages=messages)
-
-                if fallback_response.tool_calls:
-                    tool_call = fallback_response.tool_calls[0].function
-                    return {
-                        "type": "tool_call",
-                        "tool_name": tool_call.name,
-                        "arguments": json.loads(tool_call.arguments)
-                    }
-                elif fallback_response.content:
-                    return {
-                        "type": "message",
-                        "content": fallback_response.content
-                    }
-                else:
-                    return {"type": "message", "content": "Received an empty response from Groq fallback."}
-            
-            # If Gemini succeeds normally
-            if response.function_calls:
-                tool_call = response.function_calls[0]
-                return {
-                    "type": "tool_call",
-                    "tool_name": tool_call.name,
-                    "arguments": dict(tool_call.args) if tool_call.args else {}
-                }
-            elif response.text:
-                print(f"DEBUG: Gemini Response: {response.text[:100]}...")
-                return {
-                    "type": "message",
-                    "content": response.text
-                }
-            else:
-                # Force a response if Gemini is silent but doesn't call functions (happens with Flash models)
-                print("DEBUG: Gemini returned empty text and no function calls.")
-                return {"type": "message", "content": "I have processed the data. Based on what I see, let me know if you would like me to continue with a file modification or if there's anything else I can do!"}
+        # If we exit the loop, all models failed
+        print(f"DEBUG: All models failed. Last error: {last_error}")
+        return {"type": "message", "content": "Server busy."}
             
     except Exception as e:
         print(f"ERROR: {str(e)}") 
-        raise HTTPException(status_code=500, detail=f"API Error: {str(e)}")
+        # Return fallback error msg instead of raising to not crash extension entirely without UI feedback
+        return {"type": "message", "content": "Server busy."}
